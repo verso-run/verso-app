@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verso — Click-to-Route</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+
+  /* Header */
+  .header { background: #1a1a2e; color: #fff; padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .header h1 { font-size: 16px; font-weight: 700; white-space: nowrap; }
+  .header label { font-size: 12px; }
+  .header input.num { width: 62px; padding: 5px 8px; border-radius: 5px; border: none; font-size: 13px; }
+  .header .sep { color: #555; }
+  .terrain-group { display: flex; gap: 0; }
+  .terrain-btn { padding: 5px 10px; border: 1px solid #555; background: #2a2a4a; color: #aaa; font-size: 12px; cursor: pointer; font-weight: 600; }
+  .terrain-btn:first-child { border-radius: 5px 0 0 5px; }
+  .terrain-btn:last-child { border-radius: 0 5px 5px 0; }
+  .terrain-btn.active { background: #e94560; color: #fff; border-color: #e94560; }
+
+  /* Main layout */
+  .main { flex: 1; display: flex; overflow: hidden; }
+
+  /* Sidebar */
+  .sidebar { width: 350px; background: #fff; border-right: 1px solid #ddd; overflow-y: auto; padding: 12px; }
+  .sidebar h3 { font-size: 13px; margin-bottom: 8px; color: #333; }
+
+  /* Route cards */
+  .route-card { padding: 10px 12px; border: 1px solid #eee; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: all 0.15s; border-left: 3px solid transparent; }
+  .route-card:hover { background: #f8f9fa; }
+  .route-card.active { background: #eef5ff; border-left-color: #e94560; }
+  .rc-top { display: flex; justify-content: space-between; align-items: center; }
+  .rc-rank { font-size: 14px; font-weight: 700; color: #1a1a2e; }
+  .rc-dist { font-size: 14px; font-weight: 600; color: #555; }
+  .rc-shape { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 3px; background: #eee; color: #555; font-weight: 600; margin-left: 6px; text-transform: uppercase; }
+  .rc-shape.lollipop { background: #ffeaa7; color: #856404; }
+  .rc-shape.out-and-back { background: #dfe6e9; color: #2d3436; }
+  .rc-shape.loop { background: #dcedc8; color: #33691e; }
+  .rc-stats { display: flex; gap: 12px; font-size: 11px; color: #888; margin-top: 6px; }
+  .rc-stats span { white-space: nowrap; }
+  .stat-good { color: #27ae60; font-weight: 600; }
+  .stat-bad { color: #e74c3c; font-weight: 600; }
+  .score-bar { height: 4px; border-radius: 2px; background: #eee; margin-top: 6px; }
+  .score-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, #27ae60, #2ecc71); }
+  .rc-actions { margin-top: 6px; }
+  .gpx-btn { font-size: 10px; padding: 2px 8px; border-radius: 3px; border: 1px solid #ddd; background: #f8f8f8; color: #555; cursor: pointer; font-weight: 600; }
+  .gpx-btn:hover { background: #e8e8e8; }
+
+  /* Map */
+  #map { flex: 1; }
+
+  /* Context menu */
+  .ctx-menu {
+    position: absolute; z-index: 2000;
+    background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
+    padding: 4px 0; min-width: 180px; font-size: 13px;
+  }
+  .ctx-menu-item {
+    padding: 8px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+  }
+  .ctx-menu-item:hover { background: #f0f4ff; }
+  .ctx-menu-item .icon { font-size: 15px; width: 20px; text-align: center; }
+  .ctx-menu-coords { padding: 4px 14px 6px; font-size: 10px; color: #aaa; border-bottom: 1px solid #eee; margin-bottom: 2px; }
+
+  /* Layer legend */
+  .layer-panel {
+    position: absolute; bottom: 24px; right: 12px; z-index: 1000;
+    background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.12);
+    padding: 10px 14px; font-size: 12px; min-width: 180px;
+  }
+  .layer-panel h4 { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .layer-radio { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; }
+  .layer-radio:hover { color: #1a1a2e; }
+  .layer-radio input { margin: 0; cursor: pointer; }
+  .layer-radio label { cursor: pointer; }
+
+  /* Status bar */
+  .status { padding: 6px 20px; background: #f8f8f8; border-top: 1px solid #eee; font-size: 12px; color: #888; }
+
+  .placeholder { color: #aaa; padding: 20px 0; text-align: center; font-size: 13px; line-height: 1.6; }
+
+  /* Loading pulse */
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .loading .placeholder { animation: pulse 1s ease-in-out infinite; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Verso</h1>
+  <span class="sep">|</span>
+  <label>Min km</label>
+  <input id="in-min" class="num" value="5" type="number" min="1" max="50" step="0.5" />
+  <label>Max km</label>
+  <input id="in-max" class="num" value="10" type="number" min="1" max="50" step="0.5" />
+  <span class="sep">|</span>
+  <label>Terrain</label>
+  <div class="terrain-group">
+    <button class="terrain-btn" data-terrain="flat" onclick="setTerrain('flat',this)">Flat</button>
+    <button class="terrain-btn active" data-terrain="moderate" onclick="setTerrain('moderate',this)">Moderate</button>
+    <button class="terrain-btn" data-terrain="hilly" onclick="setTerrain('hilly',this)">Hilly</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="sidebar" id="sidebar">
+    <h3>Routes</h3>
+    <div id="route-list">
+      <p class="placeholder">Right-click the map to generate routes</p>
+    </div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<div class="status" id="status">Right-click the map to start</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── Map setup ──────────────────────────────────────────────────────
+const map = L.map('map').setView([37.795, -122.394], 14);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO',
+  subdomains: 'abcd',
+  maxZoom: 20,
+}).addTo(map);
+
+const routeLayerGroup = L.layerGroup().addTo(map);
+let layerOverlay = null;
+let currentLayerName = null;
+
+let allRoutes = [];
+let startLatLon = null;
+let startMarker = null;
+let selectedTerrain = 'moderate';
+let isLoading = false;
+
+function setTerrain(val, btn) {
+  selectedTerrain = val;
+  document.querySelectorAll('.terrain-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  saveSettings();
+  // Re-generate if we have a start point
+  if (startLatLon) doGenerate(startLatLon[0], startLatLon[1]);
+}
+
+// ── Right-click context menu ───────────────────────────────────────
+let ctxMenu = null;
+let ctxLatLng = null;
+
+function hideCtxMenu() {
+  if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; }
+}
+
+map.on('contextmenu', (e) => {
+  L.DomEvent.preventDefault(e);
+  hideCtxMenu();
+  if (isLoading) return;
+
+  ctxLatLng = e.latlng;
+
+  ctxMenu = document.createElement('div');
+  ctxMenu.className = 'ctx-menu';
+  ctxMenu.innerHTML = `
+    <div class="ctx-menu-coords">${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}</div>
+    <div class="ctx-menu-item" id="ctx-route">
+      <span class="icon">&#9654;</span> Route from here
+    </div>
+  `;
+  ctxMenu.style.left = e.containerPoint.x + 'px';
+  ctxMenu.style.top = e.containerPoint.y + 'px';
+
+  document.getElementById('map').appendChild(ctxMenu);
+
+  ctxMenu.querySelector('#ctx-route').addEventListener('click', () => {
+    const ll = ctxLatLng;
+    hideCtxMenu();
+    doGenerate(ll.lat, ll.lng);
+  });
+});
+
+// Close context menu on any map interaction
+map.on('click movestart zoomstart', hideCtxMenu);
+document.addEventListener('click', (e) => {
+  if (ctxMenu && !ctxMenu.contains(e.target)) hideCtxMenu();
+});
+
+// Re-generate when distance changes
+document.getElementById('in-min').addEventListener('change', () => {
+  saveSettings();
+  if (startLatLon) doGenerate(startLatLon[0], startLatLon[1]);
+});
+document.getElementById('in-max').addEventListener('change', () => {
+  saveSettings();
+  if (startLatLon) doGenerate(startLatLon[0], startLatLon[1]);
+});
+
+// ── Color helpers ──────────────────────────────────────────────────
+function scoreColor(norm) {
+  norm = Math.max(0, Math.min(1, norm));
+  let r, g;
+  if (norm < 0.5) { r = 255; g = Math.round(255 * norm * 2); }
+  else { r = Math.round(255 * (1 - norm) * 2); g = 255; }
+  return `rgb(${r},${g},0)`;
+}
+
+function routeColor(score, bestScore) {
+  const t = bestScore > 0 ? score / bestScore : 0;
+  if (t > 0.8) return '#27ae60';
+  if (t > 0.6) return '#2ecc71';
+  if (t > 0.4) return '#f39c12';
+  return '#bbb';
+}
+
+// ── Route generation ───────────────────────────────────────────────
+async function doGenerate(lat, lon) {
+  const minKm = parseFloat(document.getElementById('in-min').value);
+  const maxKm = parseFloat(document.getElementById('in-max').value);
+
+  isLoading = true;
+  startLatLon = [lat, lon];
+  allRoutes = [];
+  routeLayerGroup.clearLayers();
+
+  // Place start marker immediately
+  startMarker = L.marker([lat, lon], {
+    icon: L.divIcon({
+      className: '',
+      html: '<div style="background:#27ae60;color:#fff;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);">S</div>',
+      iconSize: [22, 22], iconAnchor: [11, 11],
+    }),
+    zIndexOffset: 1000,
+  }).addTo(routeLayerGroup);
+
+  // Show loading state
+  const list = document.getElementById('route-list');
+  list.innerHTML = '<p class="placeholder">Generating routes...</p>';
+  document.getElementById('sidebar').classList.add('loading');
+  setStatus(`Routing from ${lat.toFixed(4)}, ${lon.toFixed(4)}...`);
+
+  try {
+    const resp = await fetch('/api/routes', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lat, lon, min_km: minKm, max_km: maxKm, terrain: selectedTerrain}),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      setStatus('Error: ' + data.error);
+      list.innerHTML = '<p class="placeholder">Error generating routes</p>';
+    } else {
+      allRoutes = data.routes;
+      renderRoutes();
+      setStatus(`${data.count} routes in ${data.elapsed_ms}ms`);
+    }
+  } catch (e) {
+    setStatus('Error: ' + e.message);
+    list.innerHTML = '<p class="placeholder">Connection error</p>';
+  } finally {
+    isLoading = false;
+    document.getElementById('sidebar').classList.remove('loading');
+  }
+}
+
+// ── Render routes ──────────────────────────────────────────────────
+function renderRoutes() {
+  routeLayerGroup.clearLayers();
+  if (!allRoutes.length) {
+    document.getElementById('route-list').innerHTML = '<p class="placeholder">No routes found. Try a different location or distance.</p>';
+    return;
+  }
+
+  const bestScore = allRoutes[0].score;
+
+  // Start marker
+  if (startLatLon) {
+    L.marker(startLatLon, {
+      icon: L.divIcon({
+        className: '',
+        html: '<div style="background:#27ae60;color:#fff;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);">S</div>',
+        iconSize: [22, 22], iconAnchor: [11, 11],
+      }),
+      zIndexOffset: 1000,
+    }).addTo(routeLayerGroup);
+  }
+
+  // Draw all routes
+  allRoutes.forEach((r, i) => {
+    const isFirst = i === 0;
+    const color = isFirst ? '#e94560' : routeColor(r.score, bestScore);
+    const weight = isFirst ? 5 : 2.5;
+    const opacity = isFirst ? 0.9 : 0.25;
+    const line = L.polyline(r.coords, {color, weight, opacity});
+    line._routeIdx = i;
+    line.on('click', (e) => { L.DomEvent.stopPropagation(e); selectRoute(i); });
+    line.addTo(routeLayerGroup);
+  });
+
+  // Fit bounds to first route
+  map.fitBounds(L.latLngBounds(allRoutes[0].coords), {padding: [50, 50]});
+
+  // Render sidebar cards
+  const list = document.getElementById('route-list');
+  list.innerHTML = '';
+  allRoutes.forEach((r, i) => {
+    const card = document.createElement('div');
+    card.className = 'route-card' + (i === 0 ? ' active' : '');
+    card.onclick = () => selectRoute(i);
+
+    const shapeClass = r.shape === 'lollipop' ? 'lollipop'
+                     : r.shape === 'out-and-back' ? 'out-and-back' : 'loop';
+    const fpClass = r.footpath_pct >= 80 ? 'stat-good' : '';
+    const rdClass = r.road_pct > 0 ? 'stat-bad' : '';
+    const scorePct = Math.min(100, (r.score / 8) * 100);
+
+    card.innerHTML = `
+      <div class="rc-top">
+        <span>
+          <span class="rc-rank">#${i + 1}</span>
+          <span class="rc-shape ${shapeClass}">${r.shape}</span>
+        </span>
+        <span class="rc-dist">${r.distance_km} km</span>
+      </div>
+      <div class="rc-stats">
+        <span class="${fpClass}">footpath: ${r.footpath_pct}%</span>
+        <span class="${rdClass}">road: ${r.road_pct}%</span>
+        <span>turns: ${r.turns_per_km}/km</span>
+      </div>
+      <div class="rc-stats">
+        <span>score: ${r.score.toFixed(2)}</span>
+        <span>composite: ${r.avg_composite.toFixed(1)}</span>
+        ${r.overlap > 0 ? `<span>overlap: ${Math.round(r.overlap * 100)}%</span>` : ''}
+      </div>
+      <div class="score-bar"><div class="score-fill" style="width:${scorePct}%"></div></div>
+      <div class="rc-actions">
+        <button class="gpx-btn" onclick="event.stopPropagation(); downloadGpx(${i})">GPX</button>
+      </div>
+    `;
+    list.appendChild(card);
+  });
+}
+
+function selectRoute(idx) {
+  if (!allRoutes.length) return;
+
+  document.querySelectorAll('.route-card').forEach((c, i) =>
+    c.classList.toggle('active', i === idx)
+  );
+
+  routeLayerGroup.clearLayers();
+
+  // Start marker
+  if (startLatLon) {
+    L.marker(startLatLon, {
+      icon: L.divIcon({
+        className: '',
+        html: '<div style="background:#27ae60;color:#fff;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);">S</div>',
+        iconSize: [22, 22], iconAnchor: [11, 11],
+      }),
+      zIndexOffset: 1000,
+    }).addTo(routeLayerGroup);
+  }
+
+  const bestScore = allRoutes[0].score;
+  const sel = allRoutes[idx];
+  L.polyline(sel.coords, {color: '#e94560', weight: 5, opacity: 0.9}).addTo(routeLayerGroup);
+
+  allRoutes.forEach((r, i) => {
+    if (i === idx) return;
+    const color = routeColor(r.score, bestScore);
+    L.polyline(r.coords, {color, weight: 2, opacity: 0.15}).addTo(routeLayerGroup);
+  });
+
+  map.fitBounds(L.latLngBounds(sel.coords), {padding: [50, 50]});
+}
+
+// ── GPX download ──────────────────────────────────────────────────
+async function downloadGpx(idx) {
+  const r = allRoutes[idx];
+  if (!r) return;
+
+  const name = `Verso ${r.distance_km}km ${r.shape}`;
+  try {
+    const resp = await fetch('/api/gpx', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({coords: r.coords, distance_km: r.distance_km, name}),
+    });
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name.replace(/\s+/g, '_')}.gpx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error('GPX download failed:', e);
+  }
+}
+
+// ── Layer visualization ────────────────────────────────────────────
+let layerData = null;
+
+async function loadLayers() {
+  try {
+    const resp = await fetch('/api/layers');
+    layerData = await resp.json();
+    buildLayerPanel();
+  } catch (e) {
+    console.warn('Could not load layers:', e);
+  }
+}
+
+function buildLayerPanel() {
+  if (!layerData || !layerData.layers) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'layer-panel';
+  panel.innerHTML = '<h4>Data Layers</h4>';
+
+  const noneDiv = document.createElement('div');
+  noneDiv.className = 'layer-radio';
+  noneDiv.innerHTML = `<input type="radio" name="layer" id="layer-none" value="" checked /><label for="layer-none">None</label>`;
+  noneDiv.querySelector('input').addEventListener('change', () => clearLayerOverlay());
+  panel.appendChild(noneDiv);
+
+  for (const [key, info] of Object.entries(layerData.layers)) {
+    if (!info.edges || !info.edges.length) continue;
+    const div = document.createElement('div');
+    div.className = 'layer-radio';
+    const id = 'layer-' + key;
+    div.innerHTML = `<input type="radio" name="layer" id="${id}" value="${key}" /><label for="${id}">${info.label}</label>`;
+    div.querySelector('input').addEventListener('change', () => showLayer(key));
+    panel.appendChild(div);
+  }
+
+  document.getElementById('map').parentElement.appendChild(panel);
+}
+
+function clearLayerOverlay() {
+  if (layerOverlay) { map.removeLayer(layerOverlay); layerOverlay = null; }
+  currentLayerName = null;
+}
+
+function showLayer(key) {
+  clearLayerOverlay();
+  if (!layerData || !layerData.layers[key]) return;
+
+  const edges = layerData.layers[key].edges;
+  if (!edges.length) return;
+
+  let minScore = Infinity, maxScore = -Infinity;
+  for (const e of edges) {
+    if (e[4] < minScore) minScore = e[4];
+    if (e[4] > maxScore) maxScore = e[4];
+  }
+  const range = Math.max(0.01, maxScore - minScore);
+
+  const sorted = edges.slice().sort((a, b) => a[4] - b[4]);
+  layerOverlay = L.layerGroup();
+
+  for (const e of sorted) {
+    const [ulat, ulon, vlat, vlon, score] = e;
+    const norm = (score - minScore) / range;
+    L.polyline([[ulat, ulon], [vlat, vlon]], {
+      color: scoreColor(norm),
+      weight: 2 + norm * 2,
+      opacity: 0.7,
+    }).addTo(layerOverlay);
+  }
+
+  layerOverlay.addTo(map);
+  routeLayerGroup.bringToFront();
+  currentLayerName = key;
+}
+
+// ── Status helper ──────────────────────────────────────────────────
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+// ── Settings persistence ────────────────────────────────────────────
+function saveSettings() {
+  localStorage.setItem('verso_settings', JSON.stringify({
+    min_km: document.getElementById('in-min').value,
+    max_km: document.getElementById('in-max').value,
+    terrain: selectedTerrain,
+  }));
+}
+
+function loadSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem('verso_settings'));
+    if (!s) return;
+    if (s.min_km) document.getElementById('in-min').value = s.min_km;
+    if (s.max_km) document.getElementById('in-max').value = s.max_km;
+    if (s.terrain) {
+      selectedTerrain = s.terrain;
+      document.querySelectorAll('.terrain-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.terrain === s.terrain);
+      });
+    }
+  } catch {}
+}
+
+// ── Init ───────────────────────────────────────────────────────────
+loadSettings();
+loadLayers();
+</script>
+</body>
+</html>
