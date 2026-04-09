@@ -287,12 +287,22 @@ document.getElementById('in-max').addEventListener('change', () => {
 
 // ── Color helpers ──────────────────────────────────────────────────
 function scoreColor(norm) {
+  // Warm natural ramp: muted taupe → amber → forest green
   norm = Math.max(0, Math.min(1, norm));
-  let r, g;
-  if (norm < 0.5) { r = 200; g = Math.round(180 * norm * 2); }
-  else { r = Math.round(200 * (1 - norm) * 2); g = 160; }
-  return `rgb(${r},${g},60)`;
+  if (norm < 0.33) {
+    const t = norm / 0.33;
+    return `rgb(${180 - Math.round(t * 20)},${160 + Math.round(t * 20)},${140 - Math.round(t * 40)})`;
+  } else if (norm < 0.66) {
+    const t = (norm - 0.33) / 0.33;
+    return `rgb(${160 - Math.round(t * 80)},${180 - Math.round(t * 10)},${100 - Math.round(t * 20)})`;
+  } else {
+    const t = (norm - 0.66) / 0.34;
+    return `rgb(${80 - Math.round(t * 35)},${170 - Math.round(t * 63)},${80 - Math.round(t * 6)})`;
+  }
 }
+
+// Canvas renderer for heatmap layer (blurred wash effect)
+const heatCanvas = L.canvas({ padding: 0.3 });
 
 function routeColor(score, bestScore) {
   const t = bestScore > 0 ? score / bestScore : 0;
@@ -509,7 +519,13 @@ function buildLayerPanel() {
 }
 
 function clearLayerOverlay() {
-  if (layerOverlay) { map.removeLayer(layerOverlay); layerOverlay = null; }
+  if (layerOverlay) {
+    map.removeLayer(layerOverlay);
+    layerOverlay = null;
+    // Remove blur from canvas
+    const container = heatCanvas._container;
+    if (container) container.style.filter = '';
+  }
   currentLayerName = null;
 }
 
@@ -527,20 +543,35 @@ function showLayer(key) {
   }
   const range = Math.max(0.01, maxScore - minScore);
 
+  // Sort low→high so high-score edges paint on top
   const sorted = edges.slice().sort((a, b) => a[4] - b[4]);
   layerOverlay = L.layerGroup();
 
   for (const e of sorted) {
     const [ulat, ulon, vlat, vlon, score] = e;
     const norm = (score - minScore) / range;
+    // Thick soft lines rendered on canvas for heatmap wash
     L.polyline([[ulat, ulon], [vlat, vlon]], {
+      renderer: heatCanvas,
       color: scoreColor(norm),
-      weight: 2 + norm * 2,
-      opacity: 0.7,
+      weight: 8 + norm * 6,
+      opacity: 0.25 + norm * 0.2,
+      lineCap: 'round',
+      lineJoin: 'round',
     }).addTo(layerOverlay);
   }
 
   layerOverlay.addTo(map);
+
+  // Apply CSS blur to the canvas element for soft wash effect
+  requestAnimationFrame(() => {
+    const container = heatCanvas._container;
+    if (container) {
+      container.style.filter = 'blur(4px)';
+      container.style.willChange = 'filter';
+    }
+  });
+
   routeLayerGroup.bringToFront();
   currentLayerName = key;
 }
