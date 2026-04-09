@@ -287,18 +287,26 @@ document.getElementById('in-max').addEventListener('change', () => {
 
 // ── Color helpers ──────────────────────────────────────────────────
 function scoreColor(norm) {
-  // Warm natural ramp: muted taupe → amber → forest green
+  // Rainbow ramp: red → orange → yellow → green → teal → blue
   norm = Math.max(0, Math.min(1, norm));
-  if (norm < 0.33) {
-    const t = norm / 0.33;
-    return `rgb(${180 - Math.round(t * 20)},${160 + Math.round(t * 20)},${140 - Math.round(t * 40)})`;
-  } else if (norm < 0.66) {
-    const t = (norm - 0.33) / 0.33;
-    return `rgb(${160 - Math.round(t * 80)},${180 - Math.round(t * 10)},${100 - Math.round(t * 20)})`;
+  let r, g, b;
+  if (norm < 0.2) {
+    const t = norm / 0.2;
+    r = 200; g = Math.round(60 + t * 100); b = 60;
+  } else if (norm < 0.4) {
+    const t = (norm - 0.2) / 0.2;
+    r = 200 - Math.round(t * 10); g = 160 + Math.round(t * 60); b = 40;
+  } else if (norm < 0.6) {
+    const t = (norm - 0.4) / 0.2;
+    r = 190 - Math.round(t * 140); g = 220 - Math.round(t * 30); b = 40 + Math.round(t * 40);
+  } else if (norm < 0.8) {
+    const t = (norm - 0.6) / 0.2;
+    r = 50 - Math.round(t * 15); g = 190 - Math.round(t * 40); b = 80 + Math.round(t * 80);
   } else {
-    const t = (norm - 0.66) / 0.34;
-    return `rgb(${80 - Math.round(t * 35)},${170 - Math.round(t * 63)},${80 - Math.round(t * 6)})`;
+    const t = (norm - 0.8) / 0.2;
+    r = 35 + Math.round(t * 40); g = 150 - Math.round(t * 50); b = 160 + Math.round(t * 60);
   }
+  return `rgb(${r},${g},${b})`;
 }
 
 // Canvas renderer for heatmap layer (blurred wash effect)
@@ -534,18 +542,61 @@ function updateHeatStyle() {
   const container = heatCanvas._container;
   if (!container || !layerOverlay) return;
   const z = map.getZoom();
-  // At z13-14 (city): blur 4px, full opacity
-  // At z15-16 (route): blur 10px, 45% opacity
-  // At z17+ (street): blur 14px, 30% opacity
-  const blur = Math.min(14, 4 + Math.max(0, z - 14) * 3);
-  const opacity = Math.max(0.25, 1.0 - Math.max(0, z - 13) * 0.18);
+  // At z13-14 (city): blur 3px, full opacity — vivid wash
+  // At z15-16 (route): blur 5px, 75% — still clearly readable
+  // At z17+ (street): blur 7px, 60% — soft but present
+  const blur = Math.min(6, 3 + Math.max(0, z - 14) * 0.8);
+  const opacity = Math.max(0.8, 1.0 - Math.max(0, z - 14) * 0.05);
   container.style.filter = `blur(${blur}px)`;
   container.style.opacity = opacity;
   container.style.willChange = 'filter, opacity';
 }
 
+// Cached layer state for zoom-responsive redraw
+let _layerEdges = null;   // sorted edges array
+let _layerRange = 0;      // score range
+let _layerMin = 0;        // min score
+let _layerLines = [];     // polyline refs for weight updates
+
+function _heatWeight(norm, zoom) {
+  // Base weight grows with zoom so edges fill the gaps between streets
+  // z13: 12-20px, z15: 24-40px, z17: 48-80px
+  const scale = Math.pow(2, Math.max(0, zoom - 13));
+  return (12 + norm * 8) * scale;
+}
+
+function _drawHeatLayer() {
+  if (!_layerEdges) return;
+  if (layerOverlay) map.removeLayer(layerOverlay);
+  layerOverlay = L.layerGroup();
+  _layerLines = [];
+  const z = map.getZoom();
+
+  for (const e of _layerEdges) {
+    const [ulat, ulon, vlat, vlon, score] = e;
+    const norm = (score - _layerMin) / _layerRange;
+    const line = L.polyline([[ulat, ulon], [vlat, vlon]], {
+      renderer: heatCanvas,
+      color: scoreColor(norm),
+      weight: _heatWeight(norm, z),
+      opacity: 0.18 + norm * 0.15,
+      lineCap: 'round',
+      lineJoin: 'round',
+    });
+    line._heatNorm = norm;
+    _layerLines.push(line);
+    line.addTo(layerOverlay);
+  }
+
+  layerOverlay.addTo(map);
+  requestAnimationFrame(updateHeatStyle);
+  routeLayerGroup.bringToFront();
+}
+
 function showLayer(key) {
   clearLayerOverlay();
+  _layerEdges = null;
+  _layerLines = [];
   if (!layerData || !layerData.layers[key]) return;
 
   const edges = layerData.layers[key].edges;
@@ -556,34 +607,22 @@ function showLayer(key) {
     if (e[4] < minScore) minScore = e[4];
     if (e[4] > maxScore) maxScore = e[4];
   }
-  const range = Math.max(0.01, maxScore - minScore);
+  _layerMin = minScore;
+  _layerRange = Math.max(0.01, maxScore - minScore);
+  _layerEdges = edges.slice().sort((a, b) => a[4] - b[4]);
 
-  // Sort low→high so high-score edges paint on top
-  const sorted = edges.slice().sort((a, b) => a[4] - b[4]);
-  layerOverlay = L.layerGroup();
-
-  for (const e of sorted) {
-    const [ulat, ulon, vlat, vlon, score] = e;
-    const norm = (score - minScore) / range;
-    L.polyline([[ulat, ulon], [vlat, vlon]], {
-      renderer: heatCanvas,
-      color: scoreColor(norm),
-      weight: 8 + norm * 6,
-      opacity: 0.25 + norm * 0.2,
-      lineCap: 'round',
-      lineJoin: 'round',
-    }).addTo(layerOverlay);
-  }
-
-  layerOverlay.addTo(map);
-  requestAnimationFrame(updateHeatStyle);
-  routeLayerGroup.bringToFront();
+  _drawHeatLayer();
   currentLayerName = key;
 }
 
-// Re-adjust heat wash on every zoom change
+// On zoom: update weights so edges scale with the map, plus blur/opacity
 map.on('zoomend', () => {
-  if (layerOverlay) updateHeatStyle();
+  if (!layerOverlay || !_layerLines.length) return;
+  const z = map.getZoom();
+  for (const line of _layerLines) {
+    line.setStyle({ weight: _heatWeight(line._heatNorm, z) });
+  }
+  updateHeatStyle();
 });
 
 // ── Status helper ──────────────────────────────────────────────────
